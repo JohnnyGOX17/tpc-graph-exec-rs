@@ -93,7 +93,7 @@ impl<I: Send + 'static, O: Clone + Send + 'static> NodeInstance<I, O> {
             if let Some(cpu_num) = self.cpu_core {
                 let core_num = core_affinity::CoreId{id: cpu_num};
                 if !core_affinity::set_for_current(core_num) {
-                    warn!("Couldn't pin Node '{}' to CPU core {}", self.name, cpu_num);
+                    warn!("Couldn't pin Node '{}' to CPU core {} (NOTE: this is expected on macOS)", self.name, cpu_num);
                 }
             }
 
