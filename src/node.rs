@@ -1,12 +1,25 @@
-use crossbeam_channel::{Receiver, Sender, bounded};
-use std::thread;
+//! # Node
+//!
+//! A node consists of a main `process` (executed continuously within a dedicated
+//! thread), and `on_start()` and `on_stop()` methods called at the creation and destruction of the
+//! Node, respectively. For simplicity, and targeted dataplane/compute-intensive applications, only
+//! Single-Producer Single-Consumer (SPSC) queue constructs are used. This also simplifies each
+//! node to only have a single input and output type specification with no added synchronization
+//! logic. Bounded queues are used for lock-free, cache-friendly, performant operation.
+//!
+//! If you need parallelism for compute-heavy stages (like a big FFT), you're often better off with
+//! vectorization or splitting the work within a stage rather than adding queue complexity.
+use crossbeam_channel::{Receiver, Sender, TryRecvError};
+use log::{debug, error, info, warn};
+use std::{thread, time};
 
+/// Common trait of a Node
 pub trait Node: Send + 'static {
     type Input: Send + 'static;
     type Output: Send + 'static;
 
     /// Process a single input and produce an output
-    fn process(&mut self, input: Self::Input) -> Option<Self::Output>;
+    fn process(&mut self, input: Option<Self::Input>) -> Option<Self::Output>;
 
     /// Called once when the node starts
     fn on_start(&mut self) {}
@@ -15,70 +28,104 @@ pub trait Node: Send + 'static {
     fn on_stop(&mut self) {}
 }
 
-/// Handle for a running node
-pub struct NodeHandle {
-    thread: Option<thread::JoinHandle<()>>,
-}
-
-impl NodeHandle {
-    pub fn join(mut self) {
-        if let Some(thread) = self.thread.take() {
-            thread.join().expect("Node thread panicked");
-        }
-    }
-}
-
 /// A node instance in the graph with its channels
 pub struct NodeInstance<I, O> {
-    input_rx: Receiver<I>,
-    output_txs: Vec<Sender<O>>,
+    /// Receiver side of channel for Node's input
+    input_rx: Option<Receiver<I>>,
+    /// Sender side of channel for Node's output
+    output_tx: Option<Sender<O>>,
     name: String,
+    node: Box<dyn Node<Input = I, Output = O>>,
 }
 
 impl<I: Send + 'static, O: Clone + Send + 'static> NodeInstance<I, O> {
-    pub fn new(name: String, buffer_size: usize) -> (Self, Sender<I>) {
-        let (tx, rx) = bounded(buffer_size);
-        (
-            NodeInstance {
-                input_rx: rx,
-                output_txs: Vec::new(),
-                name,
-            },
-            tx,
-        )
-    }
-
-    pub fn add_output(&mut self, buffer_size: usize) -> Receiver<O> {
-        let (tx, rx) = bounded(buffer_size);
-        self.output_txs.push(tx);
-        rx
-    }
-
-    pub fn spawn<N>(self, mut node: N) -> NodeHandle
+    /// Create a new NodeInstance with a given name and Node
+    pub fn new<N>(name: String, node: N) -> Self
     where
         N: Node<Input = I, Output = O>,
     {
-        let thread = thread::spawn(move || {
-            node.on_start();
+        NodeInstance {
+            input_rx: None,
+            output_tx: None,
+            name,
+            node: Box::new(node),
+        }
+    }
 
-            // Err(_) == input channel is closed, shut down
-            while let Ok(input) = self.input_rx.recv() {
-                if let Some(output) = node.process(input) {
-                    // Send to all connected outputs
-                    for tx in &self.output_txs {
-                        // If any output is disconnected, continue
-                        if tx.send(output.clone()).is_err() {
+    /// Set input receiver channel
+    pub fn set_receiver(&mut self, rx: Receiver<I>) {
+        self.input_rx = Some(rx);
+    }
+
+    /// Set output transmitter channel
+    pub fn set_sender(&mut self, tx: Sender<O>) {
+        self.output_tx = Some(tx);
+    }
+
+    /// Spawn and start new OS thread with Node logic, returning handle to thread
+    pub fn spawn(mut self) -> Result<thread::JoinHandle<()>, std::io::Error> {
+        if self.input_rx.is_none() {
+            warn!(
+                "No input (RX) channel connected to node '{}' (this may be intentional)",
+                self.name
+            );
+        }
+        if self.output_tx.is_none() {
+            warn!(
+                "No output (TX) channel connected to node '{}' (this may be intentional)",
+                self.name
+            );
+        }
+
+        if self.output_tx.is_none() && self.input_rx.is_none() {
+            error!(
+                "Both input and output channels of node '{}' are missing! Thread will spawn a Node thread with no data connections.",
+                self.name
+            );
+        }
+
+        thread::Builder::new().name(self.name.clone()).spawn(move || {
+            info!("Node '{}' starting", self.name);
+            self.node.on_start();
+
+            debug!("Node '{}' thread loop starting", self.name);
+            loop {
+                let node_output = if let Some(input_ch) = self.input_rx.as_ref() {
+                    // There exists some input channel for us to poll for new input data. Use
+                    // non-blocking receive to determine input channel state.
+                    match input_ch.try_recv() {
+                        Ok(rx_data) => self.node.process(Some(rx_data)),
+                        Err(TryRecvError::Empty) => {
+                            // #TODO: replace w/better thread yielding method, poss https://docs.rs/crossbeam/latest/crossbeam/utils/struct.Backoff.html or https://doc.rust-lang.org/std/thread/fn.yield_now.html
+                            thread::sleep(time::Duration::from_millis(1));
+                            None
+                        }
+                        Err(TryRecvError::Disconnected) => {
                             break;
                         }
+                    }
+                } else {
+                    // No input channel given, assumed intentional and data produced internal to
+                    // Node's process() logic
+                    self.node.process(None)
+                };
+
+                // If there is no Node process() output, assume this node is intentionally sinking
+                // data, or thread wait/sleep/yield has already occurred in above RX loops
+                if let Some(tx_data) = node_output {
+                    // Err(_) == channel is closed, shut down
+                    if self.output_tx
+                        .as_ref()
+                        .expect("node produced data, so output channel should be connected, to not black-hole data")
+                        .send(tx_data)
+                        .is_err() {
+                        break;
                     }
                 }
             }
 
-            node.on_stop();
-        });
-
-        NodeHandle {
-            thread: Some(thread),
-        }
+            info!("Node '{}' stopping", self.name);
+            self.node.on_stop();
+        })
     }
 }

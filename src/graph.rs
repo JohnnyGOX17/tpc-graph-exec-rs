@@ -1,26 +1,18 @@
-use crate::node::NodeHandle;
-
 /// Graph structure to manage nodes and their connections
-pub struct Graph {
-    handles: Vec<NodeHandle>,
-}
+pub struct Graph {}
 
 impl Graph {
     pub fn new() -> Self {
-        Graph {
-            handles: Vec::new(),
-        }
+        Graph {}
     }
 
-    pub fn add_handle(&mut self, handle: NodeHandle) {
-        self.handles.push(handle);
-    }
+    // make edge()
 
-    pub fn wait(self) {
-        for handle in self.handles {
-            handle.join();
-        }
-    }
+    //pub fn wait(self) {
+    //    for handle in self.handles {
+    //        handle.join();
+    //    }
+    //}
 }
 
 impl Default for Graph {
