@@ -9,9 +9,9 @@
 //!
 //! If you need parallelism for compute-heavy stages (like a big FFT), you're often better off with
 //! vectorization or splitting the work within a stage rather than adding queue complexity.
-use crossbeam_channel::{Receiver, Sender, TryRecvError};
+use crossbeam_channel::{Receiver, Sender};
 use log::{debug, error, info, warn};
-use std::{thread, time};
+use std::thread;
 
 /// Common trait of a Node
 pub trait Node: Send + 'static {
@@ -34,13 +34,17 @@ pub struct NodeInstance<I, O> {
     input_rx: Option<Receiver<I>>,
     /// Sender side of channel for Node's output
     output_tx: Option<Sender<O>>,
+    /// Node name, used in naming OS thread
     name: String,
+    /// Node to instantiate in spawned thread
     node: Box<dyn Node<Input = I, Output = O>>,
+    /// Optional CPU core to pin spawned thread to
+    cpu_core: Option<usize>,
 }
 
 impl<I: Send + 'static, O: Clone + Send + 'static> NodeInstance<I, O> {
     /// Create a new NodeInstance with a given name and Node
-    pub fn new<N>(name: String, node: N) -> Self
+    pub fn new<N>(name: String, node: N, cpu_core: Option<usize>) -> Self
     where
         N: Node<Input = I, Output = O>,
     {
@@ -49,6 +53,7 @@ impl<I: Send + 'static, O: Clone + Send + 'static> NodeInstance<I, O> {
             output_tx: None,
             name,
             node: Box::new(node),
+            cpu_core,
         }
     }
 
@@ -85,6 +90,13 @@ impl<I: Send + 'static, O: Clone + Send + 'static> NodeInstance<I, O> {
         }
 
         thread::Builder::new().name(self.name.clone()).spawn(move || {
+            if let Some(cpu_num) = self.cpu_core {
+                let core_num = core_affinity::CoreId{id: cpu_num};
+                if !core_affinity::set_for_current(core_num) {
+                    warn!("Couldn't pin Node '{}' to CPU core {}", self.name, cpu_num);
+                }
+            }
+
             info!("Node '{}' starting", self.name);
             self.node.on_start();
 
@@ -92,17 +104,13 @@ impl<I: Send + 'static, O: Clone + Send + 'static> NodeInstance<I, O> {
             loop {
                 let node_output = if let Some(input_ch) = self.input_rx.as_ref() {
                     // There exists some input channel for us to poll for new input data. Use
-                    // non-blocking receive to determine input channel state.
-                    match input_ch.try_recv() {
+                    // blocking receive method (waits till data is available) instead of
+                    // `try_recv()`- the OS scheduler puts the thread to sleep when no data
+                    // available and wakes it when data arrives. No CPU usage while waiting, near
+                    // instant wakeup.
+                    match input_ch.recv() {
                         Ok(rx_data) => self.node.process(Some(rx_data)),
-                        Err(TryRecvError::Empty) => {
-                            // #TODO: replace w/better thread yielding method, poss https://docs.rs/crossbeam/latest/crossbeam/utils/struct.Backoff.html or https://doc.rust-lang.org/std/thread/fn.yield_now.html
-                            thread::sleep(time::Duration::from_millis(1));
-                            None
-                        }
-                        Err(TryRecvError::Disconnected) => {
-                            break;
-                        }
+                        Err(_) => break, // channel closed
                     }
                 } else {
                     // No input channel given, assumed intentional and data produced internal to

@@ -1,5 +1,3 @@
-use std::{thread, time};
-
 use log::info;
 use tpc_graph_exec_rs::connect_nodes;
 use tpc_graph_exec_rs::node::{Node, NodeInstance};
@@ -19,14 +17,13 @@ impl Node for MultiplierNode {
 }
 
 /// Example node that prints values
-struct PrinterNode {}
+struct SinkNode {}
 
-impl Node for PrinterNode {
+impl Node for SinkNode {
     type Input = i32;
     type Output = ();
 
-    fn process(&mut self, input: Option<Self::Input>) -> Option<Self::Output> {
-        info!("Received: {}", input.unwrap());
+    fn process(&mut self, _input: Option<Self::Input>) -> Option<Self::Output> {
         None
     }
 }
@@ -42,7 +39,6 @@ impl Node for SourceNode {
 
     fn process(&mut self, _input: Option<Self::Input>) -> Option<Self::Output> {
         self.cntr += 1;
-        thread::sleep(time::Duration::from_secs(1));
         Some(self.cntr)
     }
 }
@@ -53,15 +49,15 @@ fn main() {
     let mut source_node = NodeInstance::new("source".to_string(), SourceNode { cntr: 0 }, Some(6));
     let mut mult_node =
         NodeInstance::new("mult x3".to_string(), MultiplierNode { factor: 3 }, Some(7));
-    let mut print_node = NodeInstance::new("printer".to_string(), PrinterNode {}, Some(8));
+    let mut sink_node = NodeInstance::new("printer".to_string(), SinkNode {}, Some(8));
 
-    connect_nodes!(source_node -> mult_node, 4);
-    connect_nodes!(mult_node -> print_node, 4);
+    connect_nodes!(source_node -> mult_node, 16);
+    connect_nodes!(mult_node -> sink_node, 16);
 
     let threads = vec![
         source_node.spawn().unwrap(),
         mult_node.spawn().unwrap(),
-        print_node.spawn().unwrap(),
+        sink_node.spawn().unwrap(),
     ];
 
     for tdx in threads {
