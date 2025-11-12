@@ -1,7 +1,7 @@
 use std::{thread, time};
 
-use crossbeam_channel::bounded;
 use log::info;
+use tpc_graph_exec_rs::connect_nodes;
 use tpc_graph_exec_rs::node::{Node, NodeInstance};
 
 /// Example node that multiplies input numbers by a given factor
@@ -15,22 +15,6 @@ impl Node for MultiplierNode {
 
     fn process(&mut self, input: Option<Self::Input>) -> Option<Self::Output> {
         Some(input.unwrap() * self.factor)
-    }
-}
-
-/// Example node that filters even numbers
-struct FilterEvenNode;
-
-impl Node for FilterEvenNode {
-    type Input = i32;
-    type Output = i32;
-
-    fn process(&mut self, input: Option<Self::Input>) -> Option<Self::Output> {
-        if input.unwrap() % 2 == 0 {
-            Some(input.unwrap())
-        } else {
-            None
-        }
     }
 }
 
@@ -67,18 +51,21 @@ fn main() {
     env_logger::init();
 
     let mut source_node = NodeInstance::new("source".to_string(), SourceNode { cntr: 0 });
+    let mut mult_node = NodeInstance::new("mult x3".to_string(), MultiplierNode { factor: 3 });
     let mut print_node = NodeInstance::new("printer".to_string(), PrinterNode {});
 
-    let (tx, rx) = bounded(5);
+    connect_nodes!(source_node -> mult_node, 4);
+    connect_nodes!(mult_node -> print_node, 4);
 
-    source_node.set_sender(tx);
-    print_node.set_receiver(rx);
+    let threads = vec![
+        source_node.spawn().unwrap(),
+        mult_node.spawn().unwrap(),
+        print_node.spawn().unwrap(),
+    ];
 
-    let source_tdx = source_node.spawn();
-    let print_tdx = print_node.spawn();
-
-    source_tdx.unwrap().join().unwrap();
-    print_tdx.unwrap().join().unwrap();
+    for tdx in threads {
+        tdx.join().unwrap();
+    }
 
     info!("Graph processing completed!");
 }
