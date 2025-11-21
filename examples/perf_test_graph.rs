@@ -8,11 +8,15 @@ struct MultiplierNode {
 }
 
 impl Node for MultiplierNode {
-    type Input = i32;
-    type Output = i32;
+    type Input = Vec<i32>;
+    type Output = Vec<i32>;
 
     fn process(&mut self, input: Option<Self::Input>) -> Option<Self::Output> {
-        Some(input.unwrap() * self.factor)
+        let mut output = vec![0; input.unwrap().len()];
+        for i in output.iter_mut() {
+            *i *= self.factor;
+        }
+        Some(output)
     }
 }
 
@@ -20,7 +24,7 @@ impl Node for MultiplierNode {
 struct SinkNode {}
 
 impl Node for SinkNode {
-    type Input = i32;
+    type Input = Vec<i32>;
     type Output = ();
 
     fn process(&mut self, _input: Option<Self::Input>) -> Option<Self::Output> {
@@ -28,28 +32,24 @@ impl Node for SinkNode {
     }
 }
 
-/// Example source node that generates data
-struct SourceNode {
-    cntr: i32,
-}
+struct SourceNode {}
 
 impl Node for SourceNode {
     type Input = ();
-    type Output = i32;
+    type Output = Vec<i32>;
 
     fn process(&mut self, _input: Option<Self::Input>) -> Option<Self::Output> {
-        self.cntr += 1;
-        Some(self.cntr)
+        Some((0..4096).collect())
     }
 }
 
 fn main() {
     env_logger::init();
 
-    let mut source_node = NodeInstance::new("source".to_string(), SourceNode { cntr: 0 }, Some(6));
+    let mut source_node = NodeInstance::new("source".to_string(), SourceNode {}, Some(6));
     let mut mult_node =
         NodeInstance::new("mult x3".to_string(), MultiplierNode { factor: 3 }, Some(7));
-    let mut sink_node = NodeInstance::new("printer".to_string(), SinkNode {}, Some(8));
+    let mut sink_node = NodeInstance::new("sink".to_string(), SinkNode {}, Some(8));
 
     connect_nodes!(source_node -> mult_node, 16);
     connect_nodes!(mult_node -> sink_node, 16);
