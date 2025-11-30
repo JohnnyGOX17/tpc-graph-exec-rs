@@ -9,6 +9,7 @@
 //!
 //! If you need parallelism for compute-heavy stages (like a big FFT), you're often better off with
 //! vectorization or splitting the work within a stage rather than adding queue complexity.
+use crate::format_size;
 use crossbeam_channel::{Receiver, Sender};
 use log::{debug, error, info, warn};
 use std::thread;
@@ -185,15 +186,14 @@ impl<I: Send + 'static + DataSize, O: Clone + Send + 'static> NodeInstance<I, O>
                 }
 
                 if telem_time.elapsed() >= Duration::from_secs(1) {
-                    let throughput = self.bytes_processed_cntr as f32 / 1_048_576.0;
                     let total_time_ns = (recv_time_acc + proc_time_acc + send_time_acc) as f32;
                     let percent_recv = 100.0 * (recv_time_acc as f32) / total_time_ns;
                     let percent_proc = 100.0 * (proc_time_acc as f32) / total_time_ns;
                     let percent_send = 100.0 * (send_time_acc as f32) / total_time_ns;
 
-                    info!("{} recv() throughput: {:.2} MiB/sec | RX wait: {:.2}%, Process wait: {:.2}%, TX wait: {:.2}%",
+                    info!("{} recv() throughput: {}/sec | RX wait: {:.2}%, Process wait: {:.2}%, TX wait: {:.2}%",
                         self.name,
-                        throughput,
+                        format_size(self.bytes_processed_cntr as f32),
                         percent_recv,
                         percent_proc,
                         percent_send
