@@ -10,3 +10,12 @@ To-do:
 * [ ] Channels and data structures are cache-optimized to minimize latency of moving between core threads.
 * [ ] Per-node performance metrics and generic logging at configurable rate
 
+## Cross-Compilation Targets
+
+### Raspberry Pi 3
+
+1. Add target `$ rustup target add armv7-unknown-linux-musleabihf` (uses `musl` target to statically link `libc` to avoid target version mismatches with ~2-5% performance tradeoff).
+2. Make sure Docker is installed and daemon running.
+3. Install Docker based [cross-compilation toolchain `cross`](https://github.com/cross-rs/cross) with `$ cargo install cross --git https://github.com/cross-rs/cross`
+4. Build with `$ cross build --target armv7-unknown-linux-musleabihf --release`
+
