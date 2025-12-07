@@ -1,4 +1,5 @@
 use log::info;
+use std::env::set_var;
 use tpc_graph_exec_rs::connect_nodes;
 use tpc_graph_exec_rs::node::{Node, NodeInstance};
 
@@ -44,6 +45,7 @@ impl Node for SourceNode {
 }
 
 fn main() {
+    unsafe { set_var("RUST_LOG", "INFO") };
     env_logger::init();
 
     let mut source_node = NodeInstance::new("source".to_string(), SourceNode {}, Some(6));

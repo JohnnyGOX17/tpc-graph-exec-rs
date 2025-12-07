@@ -8,6 +8,7 @@ core_affinity = "0.8.3"
 crossbeam-channel = "0.5.15"
 env_logger = "0.11.8"
 log = "0.4.28"
+thread-priority = "3.0.0"
 
 [profile.release]
 lto = true # Enable Link Time Optimization

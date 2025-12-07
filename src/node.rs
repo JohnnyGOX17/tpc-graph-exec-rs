@@ -135,6 +135,11 @@ impl<I: Send + 'static + DataSize, O: Clone + Send + 'static> NodeInstance<I, O>
                 }
             }
 
+            if thread_priority::set_current_thread_priority(thread_priority::ThreadPriority::Max).is_err() {
+                warn!("Couldn't set Node '{}' to maximum thread priority", self.name);
+
+            };
+
             info!("Node '{}' starting", self.name);
             self.node.on_start();
 

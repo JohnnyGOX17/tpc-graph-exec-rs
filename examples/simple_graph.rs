@@ -1,3 +1,4 @@
+use std::env::set_var;
 use std::{thread, time};
 
 use log::info;
@@ -48,6 +49,7 @@ impl Node for SourceNode {
 }
 
 fn main() {
+    unsafe { set_var("RUST_LOG", "INFO") };
     env_logger::init();
 
     let mut source_node = NodeInstance::new("source".to_string(), SourceNode { cntr: 0 }, Some(6));
