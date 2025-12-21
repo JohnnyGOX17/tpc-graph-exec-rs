@@ -3,6 +3,8 @@
 //! Uses a pseudo-random traversal pattern to defeat hardware prefetchers.
 //! The stride pattern is based on an LCG permutation to ensure each element
 //! is visited exactly once while remaining unpredictable.
+//!
+//! See also [The Mechanism behind Measuring Cache Access Latency](https://www.alibabacloud.com/blog/the-mechanism-behind-measuring-cache-access-latency_599384)
 
 use std::hint::black_box;
 use std::time::Instant;

@@ -1,3 +1,7 @@
+[target.aarch64-apple-darwin]
+# Should pickup best Apple silicon target automatically
+rustflags = ["-C", "target-cpu=native"]
+
 [target.armv7-unknown-linux-musleabihf]
 # Cortex-A53 (RPi3's CPU) optimizations
 rustflags = [

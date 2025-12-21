@@ -5,10 +5,15 @@ edition = "2024"
 
 [dependencies]
 core_affinity = "0.8.3"
-crossbeam-channel = "0.5.15"
 env_logger = "0.11.8"
 log = "0.4.28"
+# use more performant [mimalloc allocator](https://github.com/microsoft/mimalloc) over glibc default
+mimalloc = { version = "0.1.48", default-features = false }
+rtrb = "0.3.2"
 thread-priority = "3.0.0"
 
 [profile.release]
-lto = true # Enable Link Time Optimization
+# add more optimizations over [base release profile](https://doc.rust-lang.org/cargo/reference/profiles.html#release)
+lto = true # Enable Link Time Optimization across crates (fat) https://doc.rust-lang.org/cargo/reference/profiles.html#lto
+codegen-units = 1 # don't parallelize crate compilation to find code optimizations across chunks (increases compile time)
+panic = "abort" # don't unwind stack on panic, just terminate (skipping adds performance but some libs might depend on unwinding!)

@@ -3,6 +3,10 @@ use std::env::set_var;
 use tpc_graph_exec_rs::connect_nodes;
 use tpc_graph_exec_rs::node::{Node, NodeInstance};
 
+// use faster/smaller `mimalloc` allocator
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Example node that multiplies input numbers by a given factor
 struct MultiplierNode {
     factor: i32,

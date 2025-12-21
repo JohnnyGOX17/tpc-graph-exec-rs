@@ -10,8 +10,8 @@
 //! If you need parallelism for compute-heavy stages (like a big FFT), you're often better off with
 //! vectorization or splitting the work within a stage rather than adding queue complexity.
 use crate::format_size;
-use crossbeam_channel::{Receiver, Sender};
 use log::{debug, error, info, warn};
+use rtrb::{Consumer, Producer};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -66,9 +66,9 @@ pub trait Node: Send + 'static {
 /// A node instance in the graph with its channels
 pub struct NodeInstance<I, O> {
     /// Receiver side of channel for Node's input
-    input_rx: Option<Receiver<I>>,
+    input_rx: Option<Consumer<I>>,
     /// Sender side of channel for Node's output
-    output_tx: Option<Sender<O>>,
+    output_tx: Option<Producer<O>>,
     /// Node name, used in naming OS thread
     name: String,
     /// Node to instantiate in spawned thread
@@ -96,12 +96,12 @@ impl<I: Send + 'static + DataSize, O: Clone + Send + 'static> NodeInstance<I, O>
     }
 
     /// Set input receiver channel
-    pub fn set_receiver(&mut self, rx: Receiver<I>) {
+    pub fn set_receiver(&mut self, rx: Consumer<I>) {
         self.input_rx = Some(rx);
     }
 
     /// Set output transmitter channel
-    pub fn set_sender(&mut self, tx: Sender<O>) {
+    pub fn set_sender(&mut self, tx: Producer<O>) {
         self.output_tx = Some(tx);
     }
 
@@ -122,7 +122,7 @@ impl<I: Send + 'static + DataSize, O: Clone + Send + 'static> NodeInstance<I, O>
 
         if self.output_tx.is_none() && self.input_rx.is_none() {
             error!(
-                "Both input and output channels of node '{}' are missing! Thread will spawn a Node thread with no data connections.",
+                "Both input and output channels of node '{}' are missing! Thread will spawn a Node process with no data connections.",
                 self.name
             );
         }
@@ -150,25 +150,33 @@ impl<I: Send + 'static + DataSize, O: Clone + Send + 'static> NodeInstance<I, O>
             let mut proc_time_acc = 0;
             let mut send_time_acc = 0;
 
-            loop {
-                let node_output = if let Some(input_ch) = self.input_rx.as_ref() {
-                    // There exists some input channel for us to poll for new input data. Use
-                    // blocking receive method (waits till data is available) instead of
-                    // `try_recv()`- the OS scheduler puts the thread to sleep when no data
-                    // available and wakes it when data arrives. No CPU usage while waiting, near
-                    // instant wakeup.
+            'main_loop: loop {
+                let node_output = if let Some(input_ch) = self.input_rx.as_mut() {
+                    // There exists some input channel for us to poll for new input data.
+                    // rtrb's pop() is non-blocking, so we loop until data is available or the
+                    // channel is closed (producer dropped). The OS scheduler puts the thread to
+                    // sleep during yield when no data available and wakes it when scheduled.
                     let recv_time = Instant::now();
-                    match input_ch.recv() {
-                        Ok(rx_data) => {
-                            recv_time_acc += recv_time.elapsed().as_nanos();
-                            self.bytes_processed_cntr += rx_data.data_size() as u64;
-                            let proc_time = Instant::now();
-                            let retval = self.node.process(Some(rx_data));
-                            proc_time_acc += proc_time.elapsed().as_nanos();
-                            retval
-                        },
-                        Err(_) => break, // channel closed
-                    }
+                    let rx_data = loop {
+                        match input_ch.pop() {
+                            Ok(data) => break data,
+                            Err(_) => {
+                                // Queue is empty - check if producer is still alive
+                                if input_ch.is_abandoned() {
+                                    // Producer dropped, channel is closed
+                                    break 'main_loop;
+                                }
+                                // Queue just empty, yield to scheduler and try again
+                                thread::yield_now();
+                            }
+                        }
+                    };
+                    recv_time_acc += recv_time.elapsed().as_nanos();
+                    self.bytes_processed_cntr += rx_data.data_size() as u64;
+                    let proc_time = Instant::now();
+                    let retval = self.node.process(Some(rx_data));
+                    proc_time_acc += proc_time.elapsed().as_nanos();
+                    retval
                 } else {
                     // No input channel given, assumed intentional and data produced internal to
                     // Node's process() logic
@@ -178,14 +186,28 @@ impl<I: Send + 'static + DataSize, O: Clone + Send + 'static> NodeInstance<I, O>
                 // If there is no Node process() output, assume this node is intentionally sinking
                 // data, or thread wait/sleep/yield has already occurred in above RX loops
                 if let Some(tx_data) = node_output {
-                    // Err(_) == channel is closed, shut down
                     let send_time = Instant::now();
-                    if self.output_tx
-                        .as_ref()
-                        .expect("node produced data, so output channel should be connected, to not black-hole data")
-                        .send(tx_data)
-                        .is_err() {
-                        break;
+                    let output_ch = self.output_tx
+                        .as_mut()
+                        .expect("node produced data, so output channel should be connected, to not black-hole data");
+
+                    // rtrb's push() is non-blocking, so we loop until space is available or the
+                    // channel is closed (consumer dropped). On failure, push() returns the value.
+                    let mut data = tx_data;
+                    loop {
+                        match output_ch.push(data) {
+                            Ok(_) => break,
+                            Err(rtrb::PushError::Full(returned_data)) => {
+                                data = returned_data;
+                                // Queue is full - check if consumer is still alive
+                                if output_ch.is_abandoned() {
+                                    // Consumer dropped, channel is closed
+                                    break 'main_loop;
+                                }
+                                // Queue just full, yield to scheduler and try again
+                                thread::yield_now();
+                            }
+                        }
                     }
                     send_time_acc += send_time.elapsed().as_nanos();
                 }

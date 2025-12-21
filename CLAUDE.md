@@ -88,7 +88,7 @@ cargo fmt -- --check   # Check formatting without changes
 
 ### Channel Backpressure
 
-- All channels are bounded (using `crossbeam_channel::bounded`)
+- All channels are bounded SPSC queues
 - When a node's input buffer is full, upstream senders will block until space is available
 - Buffer sizes are specified when creating `NodeInstance` (see `examples/simple_graph.rs` for typical values like 100)
 

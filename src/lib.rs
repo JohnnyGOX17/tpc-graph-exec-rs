@@ -6,7 +6,7 @@ pub mod node;
 #[macro_export]
 macro_rules! connect_nodes {
     ( $tx:ident -> $rx:ident, $size:literal ) => {
-        let (tx, rx) = crossbeam_channel::bounded($size);
+        let (tx, rx) = rtrb::RingBuffer::new($size);
         $tx.set_sender(tx);
         $rx.set_receiver(rx);
     };
